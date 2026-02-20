@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>Cuddle-Fish FPV Telepresence</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <style>
+        body { background-color: #0b0c10; color: #66fcf1; font-family: 'Segoe UI', sans-serif; text-align: center; margin: 0; padding-top: 10px; user-select: none; overflow-x: hidden; }
+        
+        .top-bar { display: flex; justify-content: space-between; align-items: flex-end; padding: 0 40px; margin-bottom: 15px;}
+        .header-title { text-align: left; }
+        h1 { margin: 0 0 5px 0; text-shadow: 0 0 10px rgba(102, 252, 241, 0.3); font-size: 24px;}
+        .subtitle { color: #c5c6c7; font-size: 12px; letter-spacing: 1px; }
+        .lang-select { background: #1f2833; color: #00ffcc; border: 1px solid #45a29e; padding: 5px 10px; border-radius: 5px; font-weight: bold; cursor: pointer; outline: none; }
+
+        /* === 中央 FPV 视频屏幕 === */
+        .fpv-container { margin: 0 auto 15px; width: 800px; height: 450px; background: #000; border: 3px solid #1f2833; border-radius: 12px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.8); overflow: hidden; display: flex; justify-content: center; align-items: center;}
+        .fpv-placeholder { color: #45a29e; font-size: 18px; letter-spacing: 2px; text-shadow: 0 0 5px #45a29e; }
+        iframe { width: 100%; height: 100%; border: none; display: none; }
+        
+        /* 飞行甲板 & 仪表盘 */
+        .cockpit-core { display: flex; justify-content: center; gap: 30px; align-items: flex-end; }
+        
+        .panel { background: #13181f; padding: 15px; border-radius: 12px; border: 2px solid #2c353f; width: 260px; }
+        .panel-title { color: #45a29e; font-size: 12px; font-weight: bold; margin-bottom: 10px; letter-spacing: 1px; border-bottom: 1px solid #2c353f; padding-bottom: 5px;}
+
+        /* 中控台 */
+        .center-console { display: flex; flex-direction: column; align-items: center; gap: 15px; width: 280px;}
+        #connectBtn { background: #45a29e; color: #0b0c10; font-size: 16px; font-weight: bold; padding: 12px 0; width: 100%; border: none; border-radius: 8px; cursor: pointer; box-shadow: 0 0 15px rgba(69, 162, 158, 0.5); transition: 0.2s;}
+        #connectBtn:hover { transform: scale(1.02); background: #66fcf1; }
+        #status { font-size: 14px; color: #ffaa00; font-weight: bold; background: #1f2833; padding: 8px 15px; border-radius: 20px; border: 1px solid #45a29e; width: 90%;}
+
+        /* 仪表盘 */
+        .mini-dash { width: 100%; display: flex; justify-content: space-between; gap: 10px;}
+        .dash-box { flex: 1; background: #1f2833; border: 1px solid #45a29e; border-radius: 8px; padding: 8px; }
+        .dash-title { color: #888; font-size: 10px; margin-bottom: 5px; }
+        .dash-val { color: #00ffcc; font-size: 20px; font-weight: bold; font-family: monospace; text-shadow: 0 0 5px #00ffcc;}
+        input[type=range] { -webkit-appearance: none; width: 90%; background: transparent; margin-top: 5px; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 10px; background: #ffaa00; cursor: pointer; border-radius: 2px; margin-top: -6px; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: #45a29e; border-radius: 2px; }
+        #freqSlider::-webkit-slider-thumb { background: #00ffcc; }
+
+        .key-row { display: flex; justify-content: center; gap: 10px; margin-bottom: 10px; }
+        .key { width: 60px; height: 60px; background: #0b0c10; border: 2px solid #45a29e; border-radius: 10px; color: #c5c6c7; font-size: 20px; font-weight: bold; display: flex; flex-direction: column; justify-content: center; align-items: center; transition: 0.1s; }
+        .key span { font-size: 10px; font-weight: normal; margin-top: 2px; color: #888; }
+        
+        .active-move { background: #66fcf1; color: #000 !important; border-color: #fff !important; box-shadow: 0 0 15px #66fcf1; transform: translateY(3px); }
+        .active-pitch { background: #ffaa00; color: #000 !important; border-color: #fff !important; box-shadow: 0 0 15px #ffaa00; transform: translateY(3px); }
+        .active-stop { background: #ff3366; color: #fff !important; border-color: #fff !important; box-shadow: 0 0 15px #ff3366; transform: translateY(3px); }
+        .pitch-key { border-color: #ffaa00; color: #ffaa00; }
+        .key-space { width: 100%; height: 40px; border-color: #ffaa00; color: #ffaa00; flex-direction: row; font-size: 14px; letter-spacing: 1px;}
+    </style>
+</head>
+<body>
+
+    <div class="top-bar">
+        <div class="header-title">
+            <h1 data-i18n="title">🐡 Cuddle-Fish FPV Telepresence</h1>
+            <div class="subtitle" data-i18n="subtitle">极低延迟 P2P 图传 &nbsp;|&nbsp; 互联网远程控制</div>
+        </div>
+        
+        <select class="lang-select" id="langSelector" onchange="changeLang()">
+            <option value="zh">🇨🇳 中文</option>
+            <option value="en">🇬🇧 English</option>
+            <option value="ja">🇯🇵 日本語</option>
+        </select>
+    </div>
+
+    <div class="fpv-container">
+        <div class="fpv-placeholder" id="fpvPlaceholder" data-i18n="fpv_waiting">📡 视频链路已就绪<br><span style="font-size:12px; color:#666;">(点击下方按钮一键点亮屏幕)</span></div>
+        <iframe id="fpvFrame" allow="autoplay; fullscreen; camera; microphone"></iframe>
+    </div>
+
+    <div class="cockpit-core">
+        <div class="panel">
+            <div class="panel-title" data-i18n="panel_left">前进与方向控制 (左手: WASD)</div>
+            <div class="key-row">
+                <div id="btn-w" class="key">W<span data-i18n="key_w">前进</span></div>
+            </div>
+            <div class="key-row">
+                <div id="btn-a" class="key">A<span data-i18n="key_a">左转</span></div>
+                <div id="btn-s" class="key" style="border-color: #ff3366; color: #ff3366;">S<span data-i18n="key_s">紧急全停</span></div>
+                <div id="btn-d" class="key">D<span data-i18n="key_d">右转</span></div>
+            </div>
+        </div>
+
+        <div class="center-console">
+            <button id="connectBtn" data-i18n="btn_connect">☁️ 一键唤醒机甲 (Boot Up)</button>
+            <div id="status" data-i18n="status_offline">系统离线</div>
+            
+            <div class="mini-dash">
+                <div class="dash-box">
+                    <div class="dash-title" data-i18n="trim_title">微调 (TRIM)</div>
+                    <div class="dash-val" id="trimDisplay">00%</div>
+                    <input type="range" id="trimSlider" min="-0.5" max="0.5" step="0.05" value="0">
+                </div>
+                <div class="dash-box">
+                    <div class="dash-title" data-i18n="freq_title">油门 (FREQ)</div>
+                    <div class="dash-val" id="freqDisplay">1.7 Hz</div>
+                    <input type="range" id="freqSlider" min="0.5" max="3.5" step="0.1" value="1.7">
+                </div>
+            </div>
+            <div id="btn-space" class="key key-space" data-i18n="key_space">SPACE (姿态一键归中)</div>
+        </div>
+
+        <div class="panel">
+            <div class="panel-title" data-i18n="panel_right">高度调节 (右手: 箭头)</div>
+            <div class="key-row">
+                <div id="btn-up" class="key pitch-key">↑<span data-i18n="key_up">抬头 (浮)</span></div>
+            </div>
+            <div class="key-row">
+                <div id="btn-down" class="key pitch-key">↓<span data-i18n="key_down">低头 (潜)</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ================= ⚠️ 全球唯一身份配置区 ⚠️ =================
+        // 1. 控制指令暗号 (必须和本地 Python 脚本一致)
+        const MQTT_TOPIC = "cuddle_fish_global_cmd_998877"; 
+        
+        // 2. 专属图传暗号 (由你自定义，不要用太简单的名字，防止别人看到)
+        const VDO_STREAM_ID = "cuddle_fish_cam_998877"; 
+        
+        const MQTT_BROKER = "broker.emqx.io";
+        const MQTT_PORT = 8084; 
+        // ===========================================================
+
+        const dict = {
+            zh: {
+                title: "🐡 Cuddle-Fish FPV 沉浸驾驶舱", subtitle: "极低延迟 P2P 图传 &nbsp;|&nbsp; 互联网远程控制", 
+                fpv_waiting: "📡 视频链路已就绪<br><span style='font-size:12px; color:#666;'>(点击下方按钮一键点亮屏幕)</span>",
+                btn_connect: "☁️ 一键唤醒机甲 (Boot Up)", status_offline: "⚠️ 系统离线 (Offline)", status_online: "✅ 数据与视频链畅通 | 允许起飞", status_fail: "❌ 连接云端失败",
+                trim_title: "微调 (TRIM)", freq_title: "油门 (FREQ)",
+                panel_left: "前进与方向控制 (左手: WASD)", panel_right: "高度调节 (右手: 箭头)",
+                key_w: "前进", key_a: "左转", key_s: "紧急全停", key_d: "右转", key_up: "抬头 (浮)", key_down: "低头 (潜)", key_space: "SPACE (姿态配重一键归中)"
+            },
+            en: {
+                title: "🐡 Cuddle-Fish FPV Telepresence", subtitle: "Ultra-Low Latency P2P Video &nbsp;|&nbsp; Remote Control", 
+                fpv_waiting: "📡 Video Link Ready<br><span style='font-size:12px; color:#666;'>(Click 'Boot Up' below to start feed)</span>",
+                btn_connect: "☁️ Boot Up Mech System", status_offline: "⚠️ System Offline", status_online: "✅ All Systems Go | Cleared for Takeoff", status_fail: "❌ Connection Failed",
+                trim_title: "YAW TRIM", freq_title: "THROTTLE",
+                panel_left: "Forward & Steer (Left: WASD)", panel_right: "Altitude Control (Right: Arrows)",
+                key_w: "Forward", key_a: "Turn L", key_s: "E-Stop", key_d: "Turn R", key_up: "Pitch Up", key_down: "Pitch Down", key_space: "SPACE (Auto Center)"
+            },
+            ja: {
+                title: "🐡 Cuddle-Fish FPV コックピット", subtitle: "超低遅延 P2P 映像 &nbsp;|&nbsp; 遠隔テレプレゼンス", 
+                fpv_waiting: "📡 映像リンク準備完了<br><span style='font-size:12px; color:#666;'>(下のボタンでシステム起動)</span>",
+                btn_connect: "☁️ システム一括起動 (Boot Up)", status_offline: "⚠️ オフライン", status_online: "✅ 映像・制御リンク正常 | 離陸許可", status_fail: "❌ クラウド接続失敗",
+                trim_title: "ヨー微調整 (TRIM)", freq_title: "推力 (FREQ)",
+                panel_left: "前進・方向制御 (左手: WASD)", panel_right: "高度調整 (右手: 矢印)",
+                key_w: "前進", key_a: "左折", key_s: "緊急停止", key_d: "右折", key_up: "機首上げ", key_down: "機首下げ", key_space: "SPACE (ピッチ重心リセット)"
+            }
+        };
+
+        let currentLang = 'zh';
+        function changeLang() {
+            currentLang = document.getElementById('langSelector').value;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if(dict[currentLang][key]) el.innerHTML = dict[currentLang][key];
+            });
+            if(isConnected) document.getElementById('status').innerText = dict[currentLang]['status_online'];
+        }
+
+        // ================= 核心启动逻辑 (数据 + 视频双路齐发) =================
+        let mqttClient;
+        let isConnected = false;
+        let pitchInterval = null;
+        let currentFreq = 1.7; 
+        const MIN_FREQ = 0.5, MAX_FREQ = 3.5;  
+
+        document.getElementById('connectBtn').addEventListener('click', () => {
+            // 1. 点亮 FPV 视频屏幕
+            const fpvUrl = `https://vdo.ninja/?view=${VDO_STREAM_ID}&autostart=1&clean=1&transparent=1`;
+            document.getElementById('fpvFrame').src = fpvUrl;
+            document.getElementById('fpvFrame').style.display = 'block';
+            document.getElementById('fpvPlaceholder').style.display = 'none';
+
+            // 2. 连接 MQTT 数据链
+            const clientId = "cuddle_pilot_" + Math.random().toString(16).substr(2, 8);
+            mqttClient = new Paho.MQTT.Client(MQTT_BROKER, MQTT_PORT, clientId);
+
+            mqttClient.onConnectionLost = () => {
+                isConnected = false;
+                document.getElementById('status').innerText = dict[currentLang]['status_fail'];
+                document.getElementById('status').style.color = "#ff3366";
+                document.getElementById('connectBtn').style.display = "block";
+                document.getElementById('connectBtn').innerText = "🔄 重新尝试连接";
+            };
+
+            mqttClient.connect({
+                useSSL: true,
+                onSuccess: () => {
+                    isConnected = true;
+                    document.getElementById('status').innerText = dict[currentLang]['status_online'];
+                    document.getElementById('status').style.color = "#66fcf1";
+                    document.getElementById('connectBtn').style.display = "none";
+                    sendCmd('f1.7'); sendCmd('t0.00'); // 同步初始状态
+                }
+            });
+        });
+
+        function sendCmd(cmd) {
+            if (isConnected && mqttClient) {
+                let message = new Paho.MQTT.Message(cmd);
+                message.destinationName = MQTT_TOPIC;
+                mqttClient.send(message);
+            }
+        }
+
+        // --- 调参逻辑 ---
+        document.getElementById('trimSlider').addEventListener('input', (e) => {
+            let trimVal = parseFloat(e.target.value);
+            document.getElementById('trimDisplay').innerText = trimVal > 0 ? "R" + Math.round(trimVal*100) : (trimVal < 0 ? "L" + Math.round(Math.abs(trimVal)*100) : "00");
+            sendCmd('t' + trimVal.toFixed(2));
+        });
+
+        const freqSlider = document.getElementById('freqSlider');
+        freqSlider.addEventListener('input', (e) => { currentFreq = parseFloat(e.target.value); updateFreq(); });
+        document.addEventListener('wheel', (e) => {
+            if (!isConnected) return;
+            currentFreq += (e.deltaY < 0 ? 0.1 : -0.1);
+            if (currentFreq > MAX_FREQ) currentFreq = MAX_FREQ;
+            if (currentFreq < MIN_FREQ) currentFreq = MIN_FREQ;
+            updateFreq();
+        });
+
+        function updateFreq() {
+            document.getElementById('freqDisplay').innerText = currentFreq.toFixed(1) + 'Hz';
+            freqSlider.value = currentFreq.toFixed(1); 
+            sendCmd('f' + currentFreq.toFixed(1));
+        }
+
+        // --- 飞行控制引擎 ---
+        const keyMap = {
+            'w': { id: 'btn-w', type: 'move' }, 'a': { id: 'btn-a', type: 'move' }, 's': { id: 'btn-s', type: 'stop' }, 'd': { id: 'btn-d', type: 'move' },
+            ' ': { id: 'btn-space', cmd: 'm', type: 'pitch' }, 
+            'arrowup': { id: 'btn-up', cmd: 'i', type: 'pitch' }, 'arrowdown': { id: 'btn-down', cmd: 'k', type: 'pitch' }
+        };
+
+        const pressedKeys = new Set();
+
+        function updateMovement() {
+            if (pressedKeys.has('s')) { sendCmd('s'); return; }
+            let hasW = pressedKeys.has('w'), hasA = pressedKeys.has('a'), hasD = pressedKeys.has('d');
+            if (hasW && hasA) sendCmd('q'); else if (hasW && hasD) sendCmd('e'); 
+            else if (hasW) sendCmd('w'); else if (hasA) sendCmd('a'); else if (hasD) sendCmd('d'); 
+            else sendCmd('s'); 
+        }
+
+        function handlePress(k) {
+            if (!keyMap[k] || pressedKeys.has(k)) return;
+            const config = keyMap[k];
+            pressedKeys.add(k);
+            let activeClass = config.type === 'pitch' ? 'active-pitch' : (config.type === 'stop' ? 'active-stop' : 'active-move');
+            document.getElementById(config.id).classList.add(activeClass);
+            
+            if (config.type === 'move' || config.type === 'stop') updateMovement(); 
+            else {
+                sendCmd(config.cmd); 
+                if (config.cmd === 'i' || config.cmd === 'k') {
+                    if (pitchInterval) clearInterval(pitchInterval);
+                    pitchInterval = setInterval(() => sendCmd(config.cmd), 50);
+                }
+            }
+        }
+
+        function handleRelease(k) {
+            if (!keyMap[k] || !pressedKeys.has(k)) return;
+            const config = keyMap[k];
+            pressedKeys.delete(k);
+            let activeClass = config.type === 'pitch' ? 'active-pitch' : (config.type === 'stop' ? 'active-stop' : 'active-move');
+            document.getElementById(config.id).classList.remove(activeClass);
+
+            if (config.type === 'move' || config.type === 'stop') updateMovement();
+            else if (config.cmd === 'i' || config.cmd === 'k') clearInterval(pitchInterval);
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault(); 
+            if (e.repeat) return; 
+            handlePress(e.key.toLowerCase());
+        });
+        document.addEventListener('keyup', (e) => handleRelease(e.key.toLowerCase()));
+    </script>
+</body>
+</html>
