@@ -22,7 +22,12 @@
         .cockpit-core { display: flex; justify-content: center; gap: 30px; align-items: flex-end; }
         
         .panel { background: #13181f; padding: 15px; border-radius: 12px; border: 2px solid #2c353f; width: 260px; }
-        .panel-title { color: #45a29e; font-size: 12px; font-weight: bold; margin-bottom: 10px; letter-spacing: 1px; border-bottom: 1px solid #2c353f; padding-bottom: 5px;}
+        .panel-title { color: #45a29e; font-size: 12px; font-weight: bold; margin-bottom: 10px; letter-spacing: 1px; border-bottom: 1px solid #2c353f; padding-bottom: 5px; display: flex; justify-content: space-between; align-items: center;}
+
+        /* --- 新增：俯仰反转按钮样式 --- */
+        .invert-btn { background: transparent; color: #888; border: 1px solid #888; border-radius: 4px; padding: 2px 8px; cursor: pointer; font-size: 10px; font-weight: bold; transition: 0.2s; outline: none;}
+        .invert-btn:hover { border-color: #ffaa00; color: #ffaa00; }
+        .invert-btn.active { background: #ffaa00; color: #000; border-color: #ffaa00; box-shadow: 0 0 8px rgba(255, 170, 0, 0.6); }
 
         /* 中控台 */
         .center-console { display: flex; flex-direction: column; align-items: center; gap: 15px; width: 280px;}
@@ -73,7 +78,9 @@
 
     <div class="cockpit-core">
         <div class="panel">
-            <div class="panel-title" data-i18n="panel_left">前进与方向控制 (左手: WASD)</div>
+            <div class="panel-title">
+                <span data-i18n="panel_left">前进与方向控制 (左手: WASD)</span>
+            </div>
             <div class="key-row">
                 <div id="btn-w" class="key">W<span data-i18n="key_w">前进</span></div>
             </div>
@@ -104,7 +111,10 @@
         </div>
 
         <div class="panel">
-            <div class="panel-title" data-i18n="panel_right">高度调节 (右手: 箭头)</div>
+            <div class="panel-title">
+                <span data-i18n="panel_right">高度调节 (右手: 箭头)</span>
+                <button id="btn-invert" class="invert-btn" title="Toggle Pitch Direction">REV反转</button>
+            </div>
             <div class="key-row">
                 <div id="btn-up" class="key pitch-key">↑<span data-i18n="key_up">抬头 (浮)</span></div>
             </div>
@@ -116,10 +126,7 @@
 
     <script>
         // ================= ⚠️ 全球唯一身份配置区 ⚠️ =================
-        // 1. 控制指令暗号 (必须和本地 Python 脚本一致)
         const MQTT_TOPIC = "cuddle_fish_global_cmd_998877"; 
-        
-        // 2. 专属图传暗号 (由你自定义，不要用太简单的名字，防止别人看到)
         const VDO_STREAM_ID = "cuddle_fish_cam_998877"; 
         
         const MQTT_BROKER = "broker.emqx.io";
@@ -169,15 +176,16 @@
         let pitchInterval = null;
         let currentFreq = 1.7; 
         const MIN_FREQ = 0.5, MAX_FREQ = 3.5;  
+        
+        // --- 新增：反转状态变量 ---
+        let invertPitch = false;
 
         document.getElementById('connectBtn').addEventListener('click', () => {
-            // 1. 点亮 FPV 视频屏幕
             const fpvUrl = `https://vdo.ninja/?view=${VDO_STREAM_ID}&autostart=1&clean=1&transparent=1`;
             document.getElementById('fpvFrame').src = fpvUrl;
             document.getElementById('fpvFrame').style.display = 'block';
             document.getElementById('fpvPlaceholder').style.display = 'none';
 
-            // 2. 连接 MQTT 数据链
             const clientId = "cuddle_pilot_" + Math.random().toString(16).substr(2, 8);
             mqttClient = new Paho.MQTT.Client(MQTT_BROKER, MQTT_PORT, clientId);
 
@@ -196,7 +204,7 @@
                     document.getElementById('status').innerText = dict[currentLang]['status_online'];
                     document.getElementById('status').style.color = "#66fcf1";
                     document.getElementById('connectBtn').style.display = "none";
-                    sendCmd('f1.7'); sendCmd('t0.00'); // 同步初始状态
+                    sendCmd('f1.7'); sendCmd('t0.00'); 
                 }
             });
         });
@@ -208,6 +216,17 @@
                 mqttClient.send(message);
             }
         }
+
+        // --- 新增：REV 按钮监听事件 ---
+        const btnInvert = document.getElementById('btn-invert');
+        btnInvert.addEventListener('click', () => {
+            invertPitch = !invertPitch;
+            if (invertPitch) {
+                btnInvert.classList.add('active');
+            } else {
+                btnInvert.classList.remove('active');
+            }
+        });
 
         // --- 调参逻辑 ---
         document.getElementById('trimSlider').addEventListener('input', (e) => {
@@ -256,12 +275,20 @@
             let activeClass = config.type === 'pitch' ? 'active-pitch' : (config.type === 'stop' ? 'active-stop' : 'active-move');
             document.getElementById(config.id).classList.add(activeClass);
             
-            if (config.type === 'move' || config.type === 'stop') updateMovement(); 
-            else {
-                sendCmd(config.cmd); 
+            if (config.type === 'move' || config.type === 'stop') {
+                updateMovement(); 
+            } else {
+                // --- 新增：底层指令反转逻辑 ---
+                let actualCmd = config.cmd;
+                if (invertPitch) {
+                    if (actualCmd === 'i') actualCmd = 'k';
+                    else if (actualCmd === 'k') actualCmd = 'i';
+                }
+                
+                sendCmd(actualCmd); 
                 if (config.cmd === 'i' || config.cmd === 'k') {
                     if (pitchInterval) clearInterval(pitchInterval);
-                    pitchInterval = setInterval(() => sendCmd(config.cmd), 50);
+                    pitchInterval = setInterval(() => sendCmd(actualCmd), 50);
                 }
             }
         }
@@ -285,5 +312,4 @@
         document.addEventListener('keyup', (e) => handleRelease(e.key.toLowerCase()));
     </script>
 </body>
-
 </html>
